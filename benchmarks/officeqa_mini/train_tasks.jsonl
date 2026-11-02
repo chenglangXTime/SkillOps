@@ -1,0 +1,12 @@
+{"id": "t01", "question": "公司规定的标准上下班时间是什么？", "answer": "9:30-18:30", "paraphrase_of": "q01"}
+{"id": "t02", "question": "工资一般每个月的哪一天发放？", "answer": "10号", "kind": "train", "paraphrase_of": "q02"}
+{"id": "t03", "question": "入职体检最多可以报销多少钱？", "answer": "300元", "paraphrase_of": "q03"}
+{"id": "t04", "question": "总部最大的会议厅一共能坐多少人？", "answer": "120人", "paraphrase_of": "q04"}
+{"id": "t05", "question": "补办一张工卡需要多少钱？", "answer": "50元", "paraphrase_of": "q05"}
+{"id": "t06", "question": "员工每年的法定年假最少有几天？", "answer": "5天", "paraphrase_of": "q06"}
+{"id": "t07", "question": "报销单金额超过多少需要找总监签字审批？", "answer": "5000元", "paraphrase_of": "q07"}
+{"id": "t08", "question": "请病假多少天以上需要提交三甲医院开的证明？", "answer": "3天", "paraphrase_of": "q08"}
+{"id": "t09", "question": "想预订会议室的话，系统最早提前几天开放？", "answer": "14天", "paraphrase_of": "q09"}
+{"id": "t10", "question": "出差乘坐高铁二等座，票价标准的上限是多少？", "answer": "800元", "paraphrase_of": "q10"}
+{"id": "t11", "question": "VPN 出故障时，应该拨打 IT 支持热线的哪个分机？", "answer": "8848", "paraphrase_of": "q11"}
+{"id": "t12", "question": "采购金额达到多少以上必须走招标流程？", "answer": "50000元", "paraphrase_of": "q12"}

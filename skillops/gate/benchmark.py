@@ -32,6 +32,7 @@ class Benchmark:
     root: Path
     harness: str                       # command template
     tasks: list[dict] = field(default_factory=list)
+    train_tasks: list[dict] = field(default_factory=list)
     quick_sample: list[str] = field(default_factory=list)
     holdout: list[str] = field(default_factory=list)
     description: str = ""
@@ -44,18 +45,21 @@ class Benchmark:
             raise BenchmarkError(f"benchmark config not found: {cfg_path}")
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
 
-        tasks = []
-        tasks_file = root / cfg.get("tasks_file", "tasks.jsonl")
-        if tasks_file.is_file():
-            for line in tasks_file.read_text(encoding="utf-8").splitlines():
-                if line.strip():
-                    tasks.append(json.loads(line))
+        def _load_jsonl(fname: str | None) -> list[dict]:
+            if not fname:
+                return []
+            f = root / fname
+            if not f.is_file():
+                return []
+            return [json.loads(ln) for ln in f.read_text(encoding="utf-8").splitlines()
+                    if ln.strip()]
 
         return cls(
             name=cfg.get("name", root.name),
             root=root,
             harness=cfg["harness"],
-            tasks=tasks,
+            tasks=_load_jsonl(cfg.get("tasks_file", "tasks.jsonl")),
+            train_tasks=_load_jsonl(cfg.get("train_file")),
             quick_sample=cfg.get("quick_sample", []),
             holdout=cfg.get("holdout", []),
             description=cfg.get("description", ""),

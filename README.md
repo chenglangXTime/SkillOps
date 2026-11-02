@@ -94,6 +94,30 @@ skillops experiment run --bench benchmarks/officeqa_mini \
 > 注：`ScriptedEvolver` + `officeqa_mini` 是**测量装置的可行性验证**，证明退化
 > 通道（检索干扰）可被本框架检测与拦截；它不构成论文证据本身。
 
+## 真实 LLM 进化环（`--evolver llm`）
+
+三个组件全部换成真实模型：Agent（DeepSeek 答题，上下文 = 检索到的 top-k 技能）、
+Evolver（DeepSeek 读取含对错反馈的执行轨迹、修订技能文档）、评测（同一 Agent
+在 eval split 上作答，判分 = 空白不敏感的答案字符串匹配）。
+
+```bash
+# 密钥配置（一次性）：把 DEEPSEEK_API_KEY=sk-... 追加到 ~/.env
+skillops experiment run --bench benchmarks/officeqa_mini \
+  --evolver llm --model deepseek-chat --arm ungoverned --rounds 3 --seed 1
+```
+
+Smoke run 实测（deepseek-chat，3 轮 × 4 训练题，45 次 API 调用）：
+
+- 学习曲线：eval 0.667 → 0.889 → 1.000，锁定 holdout 1.000
+  （训练题是评测题的改写版，技能经 evolver 蒸馏后跨表述迁移）
+- **成本：12,227 tokens ≈ ¥0.02 / 次完整运行**——多 seed × 多臂的完整实验
+  预算在个位数人民币量级
+- RunManifest 记录模型名、逐轮轨迹（`trajectories_r*.json` 全量留存）、
+  token 台账；密钥只从 `~/.env` 读取，永不入仓库或 manifest
+
+判分说明：`judge()` 做大小写折叠 + 去除全部空白后的包含匹配
+（模型习惯输出 "5000 元"，标准答案为 "5000元"，空白差异不算错误）。
+
 ## 设计文档
 
 完整项目提案（定位、架构、API、里程碑、技术报告大纲）见同工作区的

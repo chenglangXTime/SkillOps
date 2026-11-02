@@ -34,12 +34,21 @@ class Gate:
         benchmark: str | Benchmark,
         min_delta: float = 0.0,
         quick_tolerance: float = 0.0,
+        eval_fn=None,
     ):
         self.benchmark = (
             benchmark if isinstance(benchmark, Benchmark) else Benchmark.load(benchmark)
         )
         self.min_delta = min_delta
         self.quick_tolerance = quick_tolerance
+        # eval_fn(library_dir, task_ids) -> {"scores":..., "accuracy":...}
+        # 默认 None → 使用基准自带的 subprocess harness；LLM 实验注入 LLM 评估器。
+        self.eval_fn = eval_fn
+
+    def _run(self, library_dir, task_ids) -> dict:
+        if self.eval_fn is not None:
+            return self.eval_fn(library_dir, task_ids)
+        return self.benchmark.run(library_dir, task_ids)
 
     def evaluate(self, registry: Registry, vid: str) -> GateVerdict:
         v = registry.ledger.get(vid)
@@ -73,8 +82,8 @@ class Gate:
         try:
             # ---- Layer 2: quick screen ----
             quick_ids = bench.quick_split()
-            base_quick = bench.run(baseline_dir, quick_ids)
-            cand_quick = bench.run(candidate_dir, quick_ids)
+            base_quick = self._run(baseline_dir, quick_ids)
+            cand_quick = self._run(candidate_dir, quick_ids)
             quick_delta = cand_quick["accuracy"] - base_quick["accuracy"]
             metrics["layers"]["quick"] = {
                 "tasks": quick_ids,
@@ -93,8 +102,8 @@ class Gate:
 
             # ---- Layer 3a: full evaluation split ----
             eval_ids = bench.eval_split()
-            base_full = bench.run(baseline_dir, eval_ids)
-            cand_full = bench.run(candidate_dir, eval_ids)
+            base_full = self._run(baseline_dir, eval_ids)
+            cand_full = self._run(candidate_dir, eval_ids)
             full_delta = cand_full["accuracy"] - base_full["accuracy"]
             metrics["layers"]["full"] = {
                 "tasks": len(eval_ids),
@@ -107,8 +116,8 @@ class Gate:
             hold_ids = bench.holdout_split()
             hold_delta = 0.0
             if hold_ids:
-                base_hold = bench.run(baseline_dir, hold_ids)
-                cand_hold = bench.run(candidate_dir, hold_ids)
+                base_hold = self._run(baseline_dir, hold_ids)
+                cand_hold = self._run(candidate_dir, hold_ids)
                 hold_delta = cand_hold["accuracy"] - base_hold["accuracy"]
                 metrics["layers"]["holdout"] = {
                     "tasks": len(hold_ids),
