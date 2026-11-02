@@ -43,9 +43,21 @@ def test_gate_passes_with_useful_skill(reg: Registry, tmp_path: Path):
     assert layers["static"]["passed"]
     # baseline 只能答 base 题；candidate 全对
     assert layers["full"]["delta"] == pytest.approx(3 / 9)
-    assert layers["holdout"]["delta"] == pytest.approx(1.0)
+    # 默认不做 holdout 认证（锁定集纪律：入库决策不触碰 holdout）
+    assert "holdout" not in layers
     # 指标已写入账本
     assert "gate" in reg.ledger.get(v.vid).metrics
+
+
+def test_gate_holdout_certification_is_opt_in(reg: Registry, tmp_path: Path):
+    skill = tmp_path / "office_policy.md"
+    skill.write_text(GOOD_SKILL)
+    v = reg.stage(skill, generator="test")
+
+    verdict = Gate(BENCH, certify_holdout=True).evaluate(reg, v.vid)
+
+    assert verdict.passed
+    assert verdict.metrics["layers"]["holdout"]["delta"] == pytest.approx(1.0)
 
 
 def test_gate_fails_without_improvement(reg: Registry, tmp_path: Path):

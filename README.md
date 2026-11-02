@@ -44,8 +44,12 @@ skillops gate office_policy@v1 --bench benchmarks/officeqa_mini --min-delta 0.0
 
 1. **静态检查**：格式、长度、密钥泄露、占位符比例 —— 零成本 fail-fast
 2. **小样本快筛**：quick_sample 上对比 baseline / candidate，明显回退提前驳回
-3. **完整基准 + 锁定 holdout 认证**：全量评估 split 上算 delta，再在锁定 holdout
-   上做一次认证，确认增益可迁移、非过拟合
+3. **完整基准**：eval split 上对比 baseline / candidate，delta ≥ min_delta 才准入
+
+**锁定集纪律**：常规入库决策不触碰 holdout（避免对锁定集的自适应使用 /
+信息泄漏）；holdout 认证是显式的一次性动作（`Gate(..., certify_holdout=True)`），
+用于版本发布前的最终认证。含义：只攻击 holdout 分布的失效无法被门控预防，
+只能由实验结束时的一次性 holdout 评测揭示——这是设计上的有意权衡。
 
 所有门控指标写入账本，`skillops log` 可审计；未通过门控的技能只能留在 staging。
 

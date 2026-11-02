@@ -46,17 +46,24 @@ def test_ungoverned_arm_shows_drift(make_repo):
 
 
 def test_gate_arm_resists_drift(make_repo):
-    """RQ2 治理臂：同一 evolver，门控拦截退化技能，准确率保持满点。"""
+    """RQ2 治理臂：门控拦截可见分布上的退化技能，eval 保持满点。
+
+    锁定集纪律的含义：只攻击 holdout 题目的退化技能（travel_old 等）
+    无法被门控发现——按设计，门控不能看 holdout。这些漏网技能由
+    实验结束时的一次性 holdout 评测揭示。这正是"严格锁定 vs 门控覆盖"
+    权衡的真实体现（论文讨论素材）。
+    """
     reg = make_repo("gated")
     m = run_experiment(reg, ExperimentConfig(
         benchmark=BENCH, arm="gate", rounds=10, seed=7,
     ))
 
     assert m["final"]["eval_accuracy"] == pytest.approx(1.0)
-    assert m["final"]["holdout_accuracy"] == pytest.approx(1.0)
     decisions = [r["decision"] for r in m["rounds"]]
-    assert "rejected" in decisions              # 退化技能被拦截
+    assert "rejected" in decisions              # 可见分布上的退化技能被拦截
     assert m["final"]["library_size"] < 10      # 库未膨胀
+    # holdout 上的漏网之鱼由最终一次性评测揭示，而非被门控预防
+    assert m["final"]["holdout_accuracy"] < m["final"]["eval_accuracy"]
 
 
 def test_same_seed_same_trajectory(make_repo):

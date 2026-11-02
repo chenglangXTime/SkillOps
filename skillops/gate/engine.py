@@ -35,6 +35,7 @@ class Gate:
         min_delta: float = 0.0,
         quick_tolerance: float = 0.0,
         eval_fn=None,
+        certify_holdout: bool = False,
     ):
         self.benchmark = (
             benchmark if isinstance(benchmark, Benchmark) else Benchmark.load(benchmark)
@@ -44,6 +45,10 @@ class Gate:
         # eval_fn(library_dir, task_ids) -> {"scores":..., "accuracy":...}
         # 默认 None → 使用基准自带的 subprocess harness；LLM 实验注入 LLM 评估器。
         self.eval_fn = eval_fn
+        # 锁定集纪律：常规入库决策只用 static + quick + eval 三层；
+        # holdout 认证是显式的一次性动作（如版本发布前），避免对锁定集的
+        # 自适应使用（adaptive overfitting / 信息泄漏）。
+        self.certify_holdout = certify_holdout
 
     def _run(self, library_dir, task_ids) -> dict:
         if self.eval_fn is not None:
@@ -112,10 +117,10 @@ class Gate:
                 "delta": full_delta,
             }
 
-            # ---- Layer 3b: locked holdout certification ----
+            # ---- Layer 3b (optional): locked holdout certification ----
             hold_ids = bench.holdout_split()
             hold_delta = 0.0
-            if hold_ids:
+            if hold_ids and self.certify_holdout:
                 base_hold = self._run(baseline_dir, hold_ids)
                 cand_hold = self._run(candidate_dir, hold_ids)
                 hold_delta = cand_hold["accuracy"] - base_hold["accuracy"]
@@ -129,10 +134,13 @@ class Gate:
             shutil.rmtree(baseline_dir, ignore_errors=True)
             shutil.rmtree(candidate_dir, ignore_errors=True)
 
-        passed = full_delta >= self.min_delta and hold_delta >= self.min_delta
+        passed = full_delta >= self.min_delta
+        if "holdout" in metrics["layers"]:
+            passed = passed and hold_delta >= self.min_delta
         reason = (
-            f"full delta {full_delta:+.3f}, holdout delta {hold_delta:+.3f} "
-            f"(required >= {self.min_delta:+.3f})"
+            f"full delta {full_delta:+.3f}"
+            + (f", holdout delta {hold_delta:+.3f}" if "holdout" in metrics["layers"] else "")
+            + f" (required >= {self.min_delta:+.3f})"
         )
         verdict = GateVerdict(passed, metrics, reason)
         registry.record_gate_result(vid, verdict.passed, metrics)
