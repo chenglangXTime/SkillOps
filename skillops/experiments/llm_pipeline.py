@@ -58,6 +58,55 @@ def retrieve_topk(question: str, library_dir: Path, k: int = 2) -> list[str]:
 
 _CHUNK_CACHE: dict[str, list[str]] = {}
 
+_YEAR_RE = re.compile(r"\b(1[89]\d{2}|20[0-2]\d)\b")
+_MONTHS = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11,
+    "december": 12,
+}
+_FILE_PERIOD_RE = re.compile(r"treasury_bulletin_(\d{4})_(\d{2})\.txt")
+_DIGIT_RE = re.compile(r"\d")
+_PHRASE_RE = re.compile(r"\b(?:[A-Z][\w'-]*(?:\s+(?:of|the|for|and|in|on)\s+|\s+|$)){2,}")
+_PHRASE_STOP = {"from", "the", "a", "an", "according", "using", "considering",
+                "to", "in", "on", "for", "of", "and", "what", "was", "were",
+                "is", "are", "by", "with", "between", "during", "as"}
+
+
+def _question_phrases(question: str) -> list[str]:
+    """题目中的大写多词专名（如 'Exchange Stabilization Fund'）——强检索信号。
+
+    句首虚词会被正则一并吞入（'From the Exchange...'），需剥掉前导虚词，
+    只保留从首个大写内容词开始的连续段。
+    """
+    phrases = []
+    for m in _PHRASE_RE.finditer(question):
+        words = m.group(0).split()
+        while words and (words[0].lower() in _PHRASE_STOP or not words[0][0].isupper()):
+            words = words[1:]
+        # 中段若出现小写非连接词，截断到该处之前
+        cut = len(words)
+        for i, w in enumerate(words):
+            if not w[0].isupper() and w.lower() not in _PHRASE_STOP:
+                cut = i
+                break
+        words = words[:cut]
+        if len(words) >= 2:
+            phrases.append(" ".join(words).lower())
+    # 去重（保留子串中较长者）
+    phrases.sort(key=len, reverse=True)
+    kept: list[str] = []
+    for p in phrases:
+        if not any(p in k for k in kept):
+            kept.append(p)
+    return kept
+
+
+def _question_periods(question: str) -> tuple[set[int], set[int]]:
+    years = {int(y) for y in _YEAR_RE.findall(question)}
+    ql = question.lower()
+    months = {n for name, n in _MONTHS.items() if name in ql}
+    return years, months
+
 
 def _load_chunks(path: Path, chunk_chars: int) -> list[str]:
     """Read a corpus txt and split into paragraph-aligned chunks (cached)."""
@@ -82,19 +131,63 @@ def _load_chunks(path: Path, chunk_chars: int) -> list[str]:
 def retrieve_corpus_chunks(question: str, corpus_dir: Path,
                            source_files: list[str], chunk_chars: int,
                            top_chunks: int) -> list[str]:
-    """Bigram-overlap retrieval over the question's oracle documents."""
+    """Period-aware retrieval over the question's oracle documents.
+
+    OfficeQA 题目几乎总含明确时间（"as reported in January 1941"）；
+    文件名自带年月（treasury_bulletin_1941_01.txt）。检索分两档：
+    1. 题目提到的年份能匹配上的文件优先（有匹配则只看匹配文件）
+    2. 块打分 = bigram 重合 + 月份命中加权 + 含数字（表格）加权
+    """
+    years, months = _question_periods(question)
     q = _bigrams(question)
-    scored: list[tuple[int, str]] = []
+    phrases = _question_phrases(question)
+
+    files: list[tuple[Path, int | None]] = []   # (path, file_month)
     for name in source_files:
         p = Path(corpus_dir) / name
         if not p.is_file():
             continue
+        m = _FILE_PERIOD_RE.match(name)
+        fy, fm = (int(m.group(1)), int(m.group(2))) if m else (None, None)
+        if years and fy is not None and fy not in years:
+            continue                              # 年份不符的文件直接排除
+        files.append((p, fm))
+    if not files:                                 # 年份过滤后为空 → 回退全部
+        for name in source_files:
+            p = Path(corpus_dir) / name
+            if p.is_file():
+                m = _FILE_PERIOD_RE.match(name)
+                files.append((p, int(m.group(2)) if m else None))
+
+    scored: list[tuple[float, str, str]] = []
+    for p, fm in files:
         for chunk in _load_chunks(p, chunk_chars):
-            score = len(q & _bigrams(chunk))
-            if score > 0:
-                scored.append((score, chunk))
+            score = float(len(q & _bigrams(chunk)))
+            cl = chunk.lower()
+            phrase_hits = sum(1 for ph in phrases if ph in cl)
+            if phrase_hits:
+                score += 10.0 * phrase_hits       # 专名短语精确命中：最强信号
+            if score <= 0:
+                continue
+            if fm is not None and fm in months:
+                score *= 1.5                      # 月份命中的文件块加权
+            if _DIGIT_RE.search(chunk):
+                score *= 1.2                      # 含数字（表格）块加权
+            scored.append((score, chunk, p.name))
+    # 多文件题目按文件配额分配：避免单文件块占满 top_chunks（跨表题必输）
+    by_file: dict[str, list[tuple[float, str]]] = {}
+    for score, chunk, fname in scored:
+        by_file.setdefault(fname, []).append((score, chunk))
+    picked: list[tuple[float, str]] = []
+    if len(by_file) > 1:
+        per_file = max(2, top_chunks // len(by_file))
+        for fname, lst in by_file.items():
+            lst.sort(key=lambda x: -x[0])
+            picked.extend(lst[:per_file])
+        picked.sort(key=lambda x: -x[0])
+        return [c for _, c in picked[:top_chunks]]
     scored.sort(key=lambda x: -x[0])
-    return [c for _, c in scored[:top_chunks]]
+    return [c for _, c, _ in scored[:top_chunks]]
 
 
 # ---------- agent & judge ----------
