@@ -67,6 +67,33 @@ verdict: PASS — full delta +0.333, holdout delta +1.000 (required >= +0.000)
 M2 后续将提供：`skillops sweep`（生命周期巡检）、`skillops scan security`
 （安全探测）、`skillops rollback`（回滚）。
 
+## 实验装置（RQ1/RQ2 验证）
+
+内置进化实验环，用于验证"无治理技能库必然退化"（RQ1）及治理臂效果（RQ2 消融）：
+
+```bash
+skillops experiment run --bench benchmarks/officeqa_mini \
+  --arm ungoverned --rounds 10 --seed 7     # 对照组：所有候选直接入库
+skillops experiment run --bench benchmarks/officeqa_mini \
+  --arm gate --rounds 10 --seed 7           # 治理臂：候选须过三层门控
+```
+
+同一确定性 evolver（`ScriptedEvolver`：先产有用技能、后产高关键词重合的
+过期"经验"，通过检索干扰拉低准确率）下的实测对照：
+
+| 臂 | 峰值 → 最终 (eval) | 锁定 holdout | 库大小 |
+|---|---|---|---|
+| ungoverned | 1.000 → 0.556 | 0.000 | 10（膨胀） |
+| gate | 1.000 → 1.000 | 1.000 | 3（精炼） |
+
+每次运行产生不可变 **RunManifest**（`runs/<run_id>/manifest.json`）：配置快照、
+随机种子、代码版本、git HEAD、逐轮决策与准确率、最终指标（holdout 全程只在
+结束时评一次）、成本台账（LLM token 数，scripted 为 0）。论文真实实验将使用
+`LLMEvolver`（M3，对接任意 OpenAI 兼容 API）在真实任务基准上运行同一装置。
+
+> 注：`ScriptedEvolver` + `officeqa_mini` 是**测量装置的可行性验证**，证明退化
+> 通道（检索干扰）可被本框架检测与拦截；它不构成论文证据本身。
+
 ## 设计文档
 
 完整项目提案（定位、架构、API、里程碑、技术报告大纲）见同工作区的

@@ -1,10 +1,17 @@
-"""officeqa_mini harness — deterministic, dependency-free.
+"""officeqa_mini harness — deterministic, dependency-free, retrieval-based.
 
-Simulates a retrieval-augmented agent: the model's base knowledge is the
-BASE_KNOWLEDGE constant; the skill library is every file under --library.
-A task is scored correct if its gold answer string appears in the combined
-text. This makes skill contributions measurable end-to-end (adding the right
-skill raises accuracy) while staying fully reproducible with zero LLM calls.
+Simulates a retrieval-augmented agent:
+
+- The model's base knowledge is the BASE_KNOWLEDGE constant.
+- The skill library is every file under --library.
+- For each question, the harness retrieves the single best-matching document
+  (character-bigram overlap; base knowledge included as one document) and
+  answers from THAT document only.
+
+Retrieval-based scoring makes library noise measurable: a degenerate skill
+with high keyword overlap but an outdated answer displaces the correct skill
+and lowers accuracy — the canonical "unmanaged library drift" failure mode.
+Fully reproducible, zero LLM calls.
 
 Usage:
     python3 harness.py --library <dir> --tasks q01,q07 --output result.json
@@ -27,6 +34,23 @@ BASE_KNOWLEDGE = """
 """
 
 
+def _bigrams(text: str) -> set[tuple[str, str]]:
+    chars = [c for c in text.lower() if c.isalnum()]
+    return set(zip(chars, chars[1:]))
+
+
+def _retrieve(question: str, docs: list[tuple[str, str]]) -> str:
+    """Return the content of the best-matching doc; ties prefer earlier docs
+    (BASE is always first in the list)."""
+    q = _bigrams(question)
+    best_content, best_score = docs[0][1], len(q & _bigrams(docs[0][1]))
+    for _, content in docs[1:]:
+        score = len(q & _bigrams(content))
+        if score > best_score:
+            best_content, best_score = content, score
+    return best_content
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--library", required=True, type=Path)
@@ -43,14 +67,17 @@ def main() -> None:
             if t["id"] in wanted:
                 tasks.append(t)
 
-    corpus = BASE_KNOWLEDGE
+    docs: list[tuple[str, str]] = [("BASE", BASE_KNOWLEDGE)]
     if args.library.is_dir():
         for f in sorted(args.library.iterdir()):
             if f.is_file():
-                corpus += "\n" + f.read_text(encoding="utf-8", errors="ignore")
-    corpus = corpus.lower()
+                docs.append((f.name, f.read_text(encoding="utf-8", errors="ignore")))
 
-    scores = {t["id"]: int(t["answer"].lower() in corpus) for t in tasks}
+    scores = {}
+    for t in tasks:
+        doc = _retrieve(t["question"], docs)
+        scores[t["id"]] = int(t["answer"].lower() in doc.lower())
+
     n = len(tasks)
     result = {
         "scores": scores,

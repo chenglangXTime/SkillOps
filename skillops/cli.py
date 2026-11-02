@@ -108,6 +108,33 @@ def _not_in_m1(name: str):
     return _cmd
 
 
+def cmd_experiment_run(args) -> int:
+    from skillops.experiments.runner import ExperimentConfig, run_experiment
+
+    reg = _open(args)
+    cfg = ExperimentConfig(
+        benchmark=args.bench,
+        evolver=args.evolver,
+        arm=args.arm,
+        rounds=args.rounds,
+        seed=args.seed,
+        min_delta=args.min_delta,
+        out=args.out,
+    )
+    m = run_experiment(reg, cfg)
+
+    print(f"run_id: {m['run_id']}  (arm={cfg.arm}, evolver={cfg.evolver}, seed={cfg.seed})")
+    print(f"{'rnd':>3}  {'decision':10}  {'eval_acc':>8}  {'lib_size':>8}  vid")
+    for r in m["rounds"]:
+        print(f"{r['round']:>3}  {r['decision']:10}  {r['eval_accuracy']:>8.3f}"
+              f"  {r['library_size']:>8}  {r['vid']}")
+    f = m["final"]
+    print(f"\nfinal: eval {f['eval_accuracy']:.3f}  peak {f['peak_eval_accuracy']:.3f}"
+          f"  holdout {f['holdout_accuracy']:.3f}  lib {f['library_size']}")
+    print(f"manifest: {cfg.out or reg.root / 'runs'}/{m['run_id']}/manifest.json")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="skillops",
@@ -162,6 +189,21 @@ def build_parser() -> argparse.ArgumentParser:
     for name in ("sweep", "scan", "rollback", "report"):
         sp = sub.add_parser(name, help=f"(M2) {_M2_HINT}")
         sp.set_defaults(func=_not_in_m1(name))
+
+    sp = sub.add_parser("experiment", help="run evolution experiments (RQ1/RQ2)")
+    exp_sub = sp.add_subparsers(dest="exp_command", required=True)
+    run_p = exp_sub.add_parser("run", help="run one evolution experiment")
+    run_p.add_argument("--bench", required=True, help="path to a benchmark directory")
+    run_p.add_argument("--evolver", default="scripted",
+                       choices=["scripted"], help="llm evolver ships in M3")
+    run_p.add_argument("--arm", default="ungoverned", choices=["ungoverned", "gate"],
+                       help="ungoverned = commit everything; gate = 3-layer gate")
+    run_p.add_argument("--rounds", type=int, default=10)
+    run_p.add_argument("--seed", type=int, default=42)
+    run_p.add_argument("--min-delta", type=float, default=0.0)
+    run_p.add_argument("--out", default=None, help="runs output dir (default: <repo>/runs)")
+    run_p.add_argument("--repo", default=".")
+    run_p.set_defaults(func=cmd_experiment_run)
 
     return p
 
