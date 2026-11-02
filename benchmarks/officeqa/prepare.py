@@ -59,13 +59,16 @@ def split_rows(rows: list[dict], n_train: int, n_val: int,
 
 
 def to_task(r: dict, split: str) -> dict:
+    import re
+    # source_files 分隔符不统一：部分行用 ";"，部分用内嵌换行（\r\n）
+    raw = r.get("source_files", "")
+    files = [s.strip() for s in re.split(r"[;\r\n]+", raw) if s.strip()]
     return {
         "id": r["uid"],
         "question": r["question"],
         "answer": r["answer"],
         "difficulty": r.get("difficulty", "hard"),
-        "source_files": [s.strip() for s in r.get("source_files", "").split(";")
-                         if s.strip()],
+        "source_files": files,
         "split": split,
     }
 
@@ -116,9 +119,32 @@ def referenced_files(out: Path) -> list[str]:
     return sorted(files)
 
 
+def _load_hf_token() -> str | None:
+    import os
+    tok = os.environ.get("HF_TOKEN")
+    if tok:
+        return tok
+    env = Path.home() / ".env"
+    if env.is_file():
+        for line in env.read_text(encoding="utf-8").splitlines():
+            if line.startswith("HF_TOKEN="):
+                return line.split("=", 1)[1].strip().strip("'\"")
+    return None
+
+
 def download_corpus(out: Path, repo_id: str = "databricks/officeqa") -> None:
-    """Download only the parsed txts referenced by the prepared tasks."""
-    from huggingface_hub import hf_hub_download  # lazy: needs HF_TOKEN
+    """Download only the parsed txts referenced by the prepared tasks.
+
+    纯 urllib 实现（零额外依赖）；token 从环境变量或 ~/.env 读取。
+    网络受限时设 HF_ENDPOINT=https://hf-mirror.com。
+    """
+    import os
+    import urllib.request
+
+    token = _load_hf_token()
+    if not token:
+        raise RuntimeError("HF_TOKEN not found (env or ~/.env)")
+    base = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
 
     files = referenced_files(out)
     corpus = out / "corpus"
@@ -127,18 +153,41 @@ def download_corpus(out: Path, repo_id: str = "databricks/officeqa") -> None:
         dest = corpus / name
         if dest.exists():
             continue
-        path = hf_hub_download(
-            repo_id=repo_id, repo_type="dataset",
-            filename=f"treasury_bulletins_parsed/transformed/{name}",
-        )
-        dest.write_bytes(Path(path).read_bytes())
-        print(f"[{i}/{len(files)}] {name}")
+        url = (f"{base}/datasets/{repo_id}/resolve/main/"
+               f"treasury_bulletins_parsed/transformed/{name}")
+        req = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            dest.write_bytes(r.read())
+        if i % 20 == 0 or i == len(files):
+            print(f"[{i}/{len(files)}] downloaded")
     print(f"corpus ready: {len(list(corpus.glob('*.txt')))} files in {corpus}")
+
+
+def fetch_csv(dest: Path, filename: str = "officeqa_full.csv",
+              repo_id: str = "databricks/officeqa") -> Path:
+    """Download a benchmark CSV (gated) to `dest`."""
+    import os
+    import urllib.request
+
+    token = _load_hf_token()
+    if not token:
+        raise RuntimeError("HF_TOKEN not found (env or ~/.env)")
+    base = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
+    url = f"{base}/datasets/{repo_id}/resolve/main/{filename}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(r.read())
+    print(f"fetched {filename} -> {dest} ({dest.stat().st_size} bytes)")
+    return dest
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", type=Path, required=True, help="officeqa_full.csv")
+    ap.add_argument("--csv", type=Path, help="officeqa_full.csv（本地路径）")
+    ap.add_argument("--fetch", action="store_true",
+                    help="先用 HF_TOKEN 下载 CSV 到 <out>/data/（无需手动下载）")
     ap.add_argument("--out", type=Path, default=Path(__file__).resolve().parent)
     ap.add_argument("--train", type=int, default=DEFAULT_TRAIN)
     ap.add_argument("--val", type=int, default=DEFAULT_VAL)
@@ -147,7 +196,11 @@ def main() -> None:
                     help="download referenced corpus txts (needs HF_TOKEN)")
     args = ap.parse_args()
 
-    rows = load_rows(args.csv)
+    csv_path = args.csv
+    if args.fetch or not csv_path:
+        csv_path = fetch_csv(args.out / "data" / "officeqa_full.csv")
+
+    rows = load_rows(csv_path)
     train, val, hold = split_rows(rows, args.train, args.val, args.seed)
     write_benchmark(args.out, train, val, hold)
     if args.download:

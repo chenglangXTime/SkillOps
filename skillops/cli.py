@@ -124,6 +124,8 @@ def cmd_experiment_run(args) -> int:
             seed=args.seed,
             min_delta=args.min_delta,
             out=args.out,
+            eval_max_tasks=args.eval_max_tasks,
+            max_workers=args.max_workers,
         )
         m = run_llm_experiment(reg, cfg)
     else:
@@ -226,6 +228,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--seed", type=int, default=42)
     run_p.add_argument("--min-delta", type=float, default=0.0)
     run_p.add_argument("--out", default=None, help="runs output dir (default: <repo>/runs)")
+    run_p.add_argument("--eval-max-tasks", type=int, default=0,
+                       help="截断 eval split（smoke 成本校准用，0 = 不截断）")
+    run_p.add_argument("--max-workers", type=int, default=6, help="API 并发度")
     run_p.add_argument("--repo", default=".")
     run_p.set_defaults(func=cmd_experiment_run)
 

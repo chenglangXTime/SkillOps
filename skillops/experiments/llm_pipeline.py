@@ -158,24 +158,37 @@ def make_judge(bench: Benchmark):
     return judge
 
 
-def make_llm_eval_fn(client: DeepSeekClient, bench: Benchmark, top_k: int = 2):
-    """Build a Gate-compatible evaluator: (library_dir, task_ids) -> result dict."""
+def make_llm_eval_fn(client: DeepSeekClient, bench: Benchmark, top_k: int = 2,
+                     max_workers: int = 6):
+    """Build a Gate-compatible evaluator: (library_dir, task_ids) -> result dict.
+
+    语料型基准单题上下文大，评测并发执行（结果与顺序无关，确定性不受影响）。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
     task_by_id = {t["id"]: t for t in bench.tasks}
     judge_fn = make_judge(bench)
     corpus_dir = (bench.root / bench.corpus_dir) if bench.corpus_dir else None
 
+    def _score_one(tid: str) -> tuple[str, int]:
+        t = task_by_id[tid]
+        chunks = None
+        if corpus_dir is not None:
+            chunks = retrieve_corpus_chunks(
+                t["question"], corpus_dir, t.get("source_files", []),
+                bench.chunk_chars, bench.top_chunks)
+        out = answer_question(client, t["question"], Path(library_dir_ref[0]), top_k,
+                              corpus_chunks=chunks)
+        return tid, judge_fn(t["answer"], out)
+
+    library_dir_ref: list = [None]  # set per call, read by workers
+
     def eval_fn(library_dir, task_ids) -> dict:
-        scores = {}
-        for tid in task_ids:
-            t = task_by_id[tid]
-            chunks = None
-            if corpus_dir is not None:
-                chunks = retrieve_corpus_chunks(
-                    t["question"], corpus_dir, t.get("source_files", []),
-                    bench.chunk_chars, bench.top_chunks)
-            out = answer_question(client, t["question"], Path(library_dir), top_k,
-                                  corpus_chunks=chunks)
-            scores[tid] = judge_fn(t["answer"], out)
+        library_dir_ref[0] = library_dir
+        scores: dict[str, int] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            for tid, s in pool.map(_score_one, task_ids):
+                scores[tid] = s
         n = len(task_ids)
         return {"scores": scores,
                 "accuracy": (sum(scores.values()) / n) if n else 0.0, "n": n}
@@ -237,6 +250,8 @@ class LLMExperimentConfig:
     min_delta: float = 0.0
     top_k: int = 2
     out: str | None = None
+    eval_max_tasks: int = 0          # >0 时截断 eval split（smoke 成本校准用）
+    max_workers: int = 6             # API 并发度
 
 
 def run_llm_experiment(reg: Registry, config: LLMExperimentConfig,
@@ -247,10 +262,13 @@ def run_llm_experiment(reg: Registry, config: LLMExperimentConfig,
     client = client or DeepSeekClient(model=config.model)
     evolver = LLMEvolver(client)
     judge_fn = make_judge(bench)
-    eval_fn = make_llm_eval_fn(client, bench, top_k=config.top_k)
+    eval_fn = make_llm_eval_fn(client, bench, top_k=config.top_k,
+                               max_workers=config.max_workers)
     gate = (Gate(bench, min_delta=config.min_delta, eval_fn=eval_fn)
             if config.arm == "gate" else None)
     eval_ids = bench.eval_split()
+    if config.eval_max_tasks > 0:
+        eval_ids = eval_ids[: config.eval_max_tasks]
 
     run_id = (f"{utc_now().replace(':', '').replace('+', 'Z')}"
               f"_{config.arm}_llm-{config.model}_s{config.seed}")
@@ -282,25 +300,30 @@ def run_llm_experiment(reg: Registry, config: LLMExperimentConfig,
             if not batch:
                 batch = train[: config.train_per_round]
 
-            # 1) Agent 执行训练任务（带当前技能库 + 语料检索），收集轨迹
+            # 1) Agent 执行训练任务（带当前技能库 + 语料检索，并发），收集轨迹
+            from concurrent.futures import ThreadPoolExecutor
+
             corpus_dir = (bench.root / bench.corpus_dir) if bench.corpus_dir else None
-            trajectories = []
-            for t in batch:
-                view = reg.library_view()
-                try:
-                    chunks = None
-                    if corpus_dir is not None:
-                        chunks = retrieve_corpus_chunks(
-                            t["question"], corpus_dir, t.get("source_files", []),
-                            bench.chunk_chars, bench.top_chunks)
-                    out = answer_question(client, t["question"], view, config.top_k,
-                                          corpus_chunks=chunks)
-                finally:
-                    shutil.rmtree(view, ignore_errors=True)
-                trajectories.append({
+            view = reg.library_view()
+
+            def _run_train(t: dict) -> dict:
+                chunks = None
+                if corpus_dir is not None:
+                    chunks = retrieve_corpus_chunks(
+                        t["question"], corpus_dir, t.get("source_files", []),
+                        bench.chunk_chars, bench.top_chunks)
+                out = answer_question(client, t["question"], view, config.top_k,
+                                      corpus_chunks=chunks)
+                return {
                     "id": t["id"], "question": t["question"], "output": out,
                     "gold": t["answer"], "correct": judge_fn(t["answer"], out),
-                })
+                }
+
+            try:
+                with ThreadPoolExecutor(max_workers=config.max_workers) as pool:
+                    trajectories = list(pool.map(_run_train, batch))
+            finally:
+                shutil.rmtree(view, ignore_errors=True)
             (run_dir / f"trajectories_r{r}.json").write_text(
                 json.dumps(trajectories, ensure_ascii=False, indent=2),
                 encoding="utf-8")

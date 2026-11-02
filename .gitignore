@@ -5,3 +5,10 @@ __pycache__/
 dist/
 build/
 .env
+
+# Gated OfficeQA data (CC-BY-SA 4.0, answers must not be redistributed)
+benchmarks/officeqa/data/
+benchmarks/officeqa/corpus/
+benchmarks/officeqa/tasks.jsonl
+benchmarks/officeqa/train_tasks.jsonl
+benchmarks/officeqa/benchmark.json
