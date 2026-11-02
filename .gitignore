@@ -1,0 +1,6 @@
+# Repo-level ignores
+__pycache__/
+*.egg-info/
+.pytest_cache/
+dist/
+build/
