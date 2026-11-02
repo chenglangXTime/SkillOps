@@ -1,0 +1,9 @@
+{
+  "name": "officeqa_mini",
+  "version": "0.1.0",
+  "description": "Minimal verifiable domain for SkillOps demos: office-policy QA where 6 tasks are answerable from base knowledge and 6 require skills to be present in the library. Deterministic retrieval-style harness — a demonstration of the gate mechanics, not a real agent benchmark.",
+  "tasks_file": "tasks.jsonl",
+  "harness": "\"{python}\" \"{benchmark_dir}/harness.py\" --library \"{library_dir}\" --tasks \"{task_ids}\" --output \"{output_json}\"",
+  "quick_sample": ["q01", "q02", "q07", "q08"],
+  "holdout": ["q10", "q11", "q12"]
+}

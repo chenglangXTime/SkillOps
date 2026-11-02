@@ -1,0 +1,12 @@
+{"id": "q01", "question": "公司标准工作时间是几点到几点？", "answer": "9:30-18:30", "kind": "base"}
+{"id": "q02", "question": "每月几号发放工资？", "answer": "10号", "kind": "base"}
+{"id": "q03", "question": "入职体检的报销上限是多少元？", "answer": "300元", "kind": "base"}
+{"id": "q04", "question": "总部大会议厅最多容纳多少人？", "answer": "120人", "kind": "base"}
+{"id": "q05", "question": "工卡遗失的补办费用是多少元？", "answer": "50元", "kind": "base"}
+{"id": "q06", "question": "员工法定年假最少有多少天？", "answer": "5天", "kind": "base"}
+{"id": "q07", "question": "差旅报销单超过多少元需要总监审批？", "answer": "5000元", "kind": "skill", "skill_hint": "expense_policy"}
+{"id": "q08", "question": "病假超过多少天需要提供三甲医院证明？", "answer": "3天", "kind": "skill", "skill_hint": "leave_policy"}
+{"id": "q09", "question": "会议室预订系统提前多少天开放预订？", "answer": "14天", "kind": "skill", "skill_hint": "meeting_policy"}
+{"id": "q10", "question": "高铁二等座差旅标准的最高单价是多少？", "answer": "800元", "kind": "skill", "skill_hint": "travel_policy"}
+{"id": "q11", "question": "VPN 故障时 IT 支持热线的分机号是多少？", "answer": "8848", "kind": "skill", "skill_hint": "it_support"}
+{"id": "q12", "question": "单笔采购超过多少元必须走招标流程？", "answer": "50000元", "kind": "skill", "skill_hint": "procurement_policy"}

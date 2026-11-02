@@ -34,7 +34,38 @@ skillops commit <skill_id>           # 通过门控后入库（M1：手动门控
 skillops log                         # 查看版本谱系与审计记录
 ```
 
-M2 将提供：`skillops gate run`（自动评测门控）、`skillops sweep`（生命周期巡检）、`skillops scan security`（安全探测）、`skillops rollback`（回滚）。
+## 评测门控（Gate，M2 已交付第一层）
+
+新技能入库前必须通过三层门控：
+
+```bash
+skillops gate office_policy@v1 --bench benchmarks/officeqa_mini --min-delta 0.0
+```
+
+1. **静态检查**：格式、长度、密钥泄露、占位符比例 —— 零成本 fail-fast
+2. **小样本快筛**：quick_sample 上对比 baseline / candidate，明显回退提前驳回
+3. **完整基准 + 锁定 holdout 认证**：全量评估 split 上算 delta，再在锁定 holdout
+   上做一次认证，确认增益可迁移、非过拟合
+
+所有门控指标写入账本，`skillops log` 可审计；未通过门控的技能只能留在 staging。
+
+仓库内置 `benchmarks/officeqa_mini/` 演示基准：一个确定性的检索式验证域
+（零 LLM 调用、可复现），用于演示门控机制。接入真实 Agent 运行时只需实现
+同样的 harness 协议（输入技能库目录 + 任务子集，输出 JSON 分数）。
+
+输出示例：
+
+```
+[static]   PASS  (0 findings)
+[quick   ] baseline 0.500 → candidate 1.000  (delta +0.500, 4 tasks)
+[full    ] baseline 0.667 → candidate 1.000  (delta +0.333, 9 tasks)
+[holdout ] baseline 0.000 → candidate 1.000  (delta +1.000, 3 tasks)
+
+verdict: PASS — full delta +0.333, holdout delta +1.000 (required >= +0.000)
+```
+
+M2 后续将提供：`skillops sweep`（生命周期巡检）、`skillops scan security`
+（安全探测）、`skillops rollback`（回滚）。
 
 ## 设计文档
 

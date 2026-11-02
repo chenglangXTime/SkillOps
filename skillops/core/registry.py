@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import shutil
+import tempfile
 from pathlib import Path
 
 from skillops.core.models import SkillStatus, SkillVersion, utc_now
@@ -161,3 +162,45 @@ class Registry:
 
     def list_versions(self, status: SkillStatus | None = None) -> list[SkillVersion]:
         return self.ledger.list_versions(status)
+
+    # ---- gate support ----
+
+    def library_view(self, candidate_vid: str | None = None) -> Path:
+        """Materialize a flat directory of active skill files for a harness.
+
+        Baseline view: every currently COMMITTED skill (one file per skill_id).
+        Candidate view: the staged `candidate_vid` swapped in, replacing its
+        still-committed parent of the same skill_id.
+
+        Returns a temp directory path; the caller is responsible for cleanup.
+        """
+        tmp = Path(tempfile.mkdtemp(prefix="skillops_lib_"))
+        candidate = self.ledger.get(candidate_vid) if candidate_vid else None
+
+        for v in self.ledger.list_versions(SkillStatus.COMMITTED):
+            if candidate and v.skill_id == candidate.skill_id:
+                continue  # replaced by the candidate
+            self._export_skill_file(v, tmp)
+        if candidate:
+            self._export_skill_file(candidate, tmp)
+        return tmp
+
+    def _export_skill_file(self, v: SkillVersion, dest_dir: Path) -> None:
+        src = self.root / v.rel_path
+        suffix = src.suffix or ".md"
+        shutil.copyfile(src, dest_dir / f"{v.skill_id}{suffix}")
+
+    def record_gate_result(self, vid: str, passed: bool, metrics: dict) -> None:
+        """Persist gate metrics on the version row + audit trail."""
+        v = self.ledger.get(vid)
+        merged = {**v.metrics, "gate": metrics}
+        self.ledger.update_status(vid, v.status, metrics=merged)
+        self.ledger.audit(
+            "gate",
+            {
+                "vid": vid,
+                "passed": passed,
+                "benchmark": metrics.get("benchmark"),
+                "full_delta": metrics.get("layers", {}).get("full", {}).get("delta"),
+            },
+        )

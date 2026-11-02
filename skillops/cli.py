@@ -78,6 +78,29 @@ def cmd_discover(args) -> int:
     return 0
 
 
+def cmd_gate(args) -> int:
+    from skillops.gate.engine import Gate
+
+    reg = _open(args)
+    gate = Gate(benchmark=args.bench, min_delta=args.min_delta)
+    verdict = gate.evaluate(reg, args.vid)
+
+    layers = verdict.metrics.get("layers", {})
+    static = layers.get("static", {})
+    print(f"[static]   {'PASS' if static.get('passed') else 'FAIL'}"
+          f"  ({len(static.get('findings', []))} findings)")
+    for f in static.get("findings", []):
+        print(f"           {f['severity']:5s} {f['check']}: {f['message']}")
+    for name in ("quick", "full", "holdout"):
+        if name in layers:
+            L = layers[name]
+            n = L["tasks"] if isinstance(L["tasks"], int) else len(L["tasks"])
+            print(f"[{name:8s}] baseline {L['baseline']:.3f} → candidate {L['candidate']:.3f}"
+                  f"  (delta {L['delta']:+.3f}, {n} tasks)")
+    print(f"\nverdict: {'PASS' if verdict.passed else 'FAIL'} — {verdict.reason}")
+    return 0 if verdict.passed else 1
+
+
 def _not_in_m1(name: str):
     def _cmd(args) -> int:
         print(f"`skillops {name}` {_M2_HINT}")
@@ -128,7 +151,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("path")
     sp.set_defaults(func=cmd_discover)
 
-    for name in ("gate", "sweep", "scan", "rollback", "report"):
+    sp = sub.add_parser("gate", help="run layered evaluation gate on a staged version")
+    sp.add_argument("vid")
+    sp.add_argument("--bench", required=True, help="path to a benchmark directory")
+    sp.add_argument("--min-delta", type=float, default=0.0,
+                    help="minimum accuracy delta vs baseline (default 0.0 = no regression)")
+    sp.add_argument("--repo", default=".")
+    sp.set_defaults(func=cmd_gate)
+
+    for name in ("sweep", "scan", "rollback", "report"):
         sp = sub.add_parser(name, help=f"(M2) {_M2_HINT}")
         sp.set_defaults(func=_not_in_m1(name))
 
