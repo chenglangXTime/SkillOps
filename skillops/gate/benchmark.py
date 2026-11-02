@@ -30,12 +30,17 @@ class BenchmarkError(RuntimeError):
 class Benchmark:
     name: str
     root: Path
-    harness: str                       # command template
+    harness: str = ""                  # command template; empty for LLM-driven benchmarks
     tasks: list[dict] = field(default_factory=list)
     train_tasks: list[dict] = field(default_factory=list)
     quick_sample: list[str] = field(default_factory=list)
     holdout: list[str] = field(default_factory=list)
     description: str = ""
+    scoring: str = "substring"         # "substring" | "officeqa_fuzzy"
+    tolerance: float = 0.0
+    corpus_dir: str = ""               # 非空 → 语料检索模式（OfficeQA）
+    chunk_chars: int = 4000
+    top_chunks: int = 6
 
     @classmethod
     def load(cls, path: str | Path) -> "Benchmark":
@@ -57,12 +62,17 @@ class Benchmark:
         return cls(
             name=cfg.get("name", root.name),
             root=root,
-            harness=cfg["harness"],
+            harness=cfg.get("harness", ""),
             tasks=_load_jsonl(cfg.get("tasks_file", "tasks.jsonl")),
             train_tasks=_load_jsonl(cfg.get("train_file")),
             quick_sample=cfg.get("quick_sample", []),
             holdout=cfg.get("holdout", []),
             description=cfg.get("description", ""),
+            scoring=cfg.get("scoring", "substring"),
+            tolerance=float(cfg.get("tolerance", 0.0)),
+            corpus_dir=cfg.get("corpus_dir", ""),
+            chunk_chars=int(cfg.get("chunk_chars", 4000)),
+            top_chunks=int(cfg.get("top_chunks", 6)),
         )
 
     # ---- task splits ----
@@ -83,7 +93,16 @@ class Benchmark:
     # ---- execution ----
 
     def run(self, library_dir: Path, task_ids: list[str]) -> dict:
-        """Run the harness against a library view; return parsed JSON result."""
+        """Run the subprocess harness against a library view (deterministic benchmarks).
+
+        LLM-driven benchmarks（如 OfficeQA，harness 为空）请通过
+        `make_llm_eval_fn` 注入评估器，不走此路径。
+        """
+        if not self.harness:
+            raise BenchmarkError(
+                f"benchmark {self.name} has no subprocess harness; "
+                "use an LLM eval_fn (see experiments.llm_pipeline)"
+            )
         if not task_ids:
             return {"scores": {}, "accuracy": 0.0, "n": 0}
         with tempfile.NamedTemporaryFile(

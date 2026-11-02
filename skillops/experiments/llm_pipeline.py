@@ -54,6 +54,49 @@ def retrieve_topk(question: str, library_dir: Path, k: int = 2) -> list[str]:
     return [c for _, _, c in scored[:k]]
 
 
+# ---------- corpus retrieval (OfficeQA 等语料型基准) ----------
+
+_CHUNK_CACHE: dict[str, list[str]] = {}
+
+
+def _load_chunks(path: Path, chunk_chars: int) -> list[str]:
+    """Read a corpus txt and split into paragraph-aligned chunks (cached)."""
+    key = f"{path}:{chunk_chars}"
+    if key in _CHUNK_CACHE:
+        return _CHUNK_CACHE[key]
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    paras = text.split("\n\n")
+    chunks, buf = [], ""
+    for p in paras:
+        if len(buf) + len(p) > chunk_chars and buf:
+            chunks.append(buf)
+            buf = p
+        else:
+            buf = f"{buf}\n\n{p}" if buf else p
+    if buf:
+        chunks.append(buf)
+    _CHUNK_CACHE[key] = chunks
+    return chunks
+
+
+def retrieve_corpus_chunks(question: str, corpus_dir: Path,
+                           source_files: list[str], chunk_chars: int,
+                           top_chunks: int) -> list[str]:
+    """Bigram-overlap retrieval over the question's oracle documents."""
+    q = _bigrams(question)
+    scored: list[tuple[int, str]] = []
+    for name in source_files:
+        p = Path(corpus_dir) / name
+        if not p.is_file():
+            continue
+        for chunk in _load_chunks(p, chunk_chars):
+            score = len(q & _bigrams(chunk))
+            if score > 0:
+                scored.append((score, chunk))
+    scored.sort(key=lambda x: -x[0])
+    return [c for _, c in scored[:top_chunks]]
+
+
 # ---------- agent & judge ----------
 
 _ANSWER_SYSTEM = (
@@ -61,18 +104,30 @@ _ANSWER_SYSTEM = (
     "否则凭自己的知识作答。只输出简短答案本身，不要解释。"
 )
 
+_CORPUS_SYSTEM = (
+    "你是金融文档问答助手。依据提供的文档片段与技能文档作答。"
+    "技能文档包含解题程序性知识（如何定位表格、处理单位、交叉验证），请遵循。"
+    "先简要推理，然后必须以 <FINAL_ANSWER>最终答案</FINAL_ANSWER> 结束。"
+    "最终答案保持简洁（数值、货币或列表），不要单位换算 invention。"
+)
+
 
 def answer_question(client: DeepSeekClient, question: str,
-                    library_dir: Path, top_k: int = 2) -> str:
+                    library_dir: Path, top_k: int = 2,
+                    corpus_chunks: list[str] | None = None) -> str:
     skills = retrieve_topk(question, library_dir, k=top_k)
-    context = ""
+    parts = []
+    if corpus_chunks:
+        parts.append("文档片段：\n\n" + "\n\n---\n\n".join(corpus_chunks))
     if skills:
-        context = "参考技能文档：\n\n" + "\n\n---\n\n".join(skills) + "\n\n"
+        parts.append("参考技能文档：\n\n" + "\n\n---\n\n".join(skills))
+    context = ("\n\n".join(parts) + "\n\n") if parts else ""
+    system = _CORPUS_SYSTEM if corpus_chunks is not None else _ANSWER_SYSTEM
     messages = [
-        {"role": "system", "content": _ANSWER_SYSTEM},
+        {"role": "system", "content": system},
         {"role": "user", "content": f"{context}问题：{question}"},
     ]
-    return client.chat(messages, max_tokens=256)
+    return client.chat(messages, max_tokens=1024 if corpus_chunks else 256)
 
 
 def _norm(text: str) -> str:
@@ -87,16 +142,40 @@ def judge(gold: str, output: str) -> int:
     return int(_norm(gold) in _norm(output))
 
 
+def make_judge(bench: Benchmark):
+    """按 benchmark.scoring 选择判分器：substring（默认）或 OfficeQA 官方模糊判分。"""
+    if bench.scoring == "officeqa_fuzzy":
+        import importlib.util
+        reward_path = bench.root / "vendor" / "reward.py"
+        spec = importlib.util.spec_from_file_location("officeqa_reward", reward_path)
+        reward = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reward)
+
+        def fuzzy(gold: str, output: str) -> int:
+            return int(reward.score_answer(gold, output, bench.tolerance) >= 1.0)
+
+        return fuzzy
+    return judge
+
+
 def make_llm_eval_fn(client: DeepSeekClient, bench: Benchmark, top_k: int = 2):
     """Build a Gate-compatible evaluator: (library_dir, task_ids) -> result dict."""
     task_by_id = {t["id"]: t for t in bench.tasks}
+    judge_fn = make_judge(bench)
+    corpus_dir = (bench.root / bench.corpus_dir) if bench.corpus_dir else None
 
     def eval_fn(library_dir, task_ids) -> dict:
         scores = {}
         for tid in task_ids:
             t = task_by_id[tid]
-            out = answer_question(client, t["question"], Path(library_dir), top_k)
-            scores[tid] = judge(t["answer"], out)
+            chunks = None
+            if corpus_dir is not None:
+                chunks = retrieve_corpus_chunks(
+                    t["question"], corpus_dir, t.get("source_files", []),
+                    bench.chunk_chars, bench.top_chunks)
+            out = answer_question(client, t["question"], Path(library_dir), top_k,
+                                  corpus_chunks=chunks)
+            scores[tid] = judge_fn(t["answer"], out)
         n = len(task_ids)
         return {"scores": scores,
                 "accuracy": (sum(scores.values()) / n) if n else 0.0, "n": n}
@@ -167,6 +246,7 @@ def run_llm_experiment(reg: Registry, config: LLMExperimentConfig,
         raise ValueError(f"benchmark {bench.name} has no train_file tasks")
     client = client or DeepSeekClient(model=config.model)
     evolver = LLMEvolver(client)
+    judge_fn = make_judge(bench)
     eval_fn = make_llm_eval_fn(client, bench, top_k=config.top_k)
     gate = (Gate(bench, min_delta=config.min_delta, eval_fn=eval_fn)
             if config.arm == "gate" else None)
@@ -202,17 +282,24 @@ def run_llm_experiment(reg: Registry, config: LLMExperimentConfig,
             if not batch:
                 batch = train[: config.train_per_round]
 
-            # 1) Agent 执行训练任务（带当前技能库），收集轨迹
+            # 1) Agent 执行训练任务（带当前技能库 + 语料检索），收集轨迹
+            corpus_dir = (bench.root / bench.corpus_dir) if bench.corpus_dir else None
             trajectories = []
             for t in batch:
                 view = reg.library_view()
                 try:
-                    out = answer_question(client, t["question"], view, config.top_k)
+                    chunks = None
+                    if corpus_dir is not None:
+                        chunks = retrieve_corpus_chunks(
+                            t["question"], corpus_dir, t.get("source_files", []),
+                            bench.chunk_chars, bench.top_chunks)
+                    out = answer_question(client, t["question"], view, config.top_k,
+                                          corpus_chunks=chunks)
                 finally:
                     shutil.rmtree(view, ignore_errors=True)
                 trajectories.append({
                     "id": t["id"], "question": t["question"], "output": out,
-                    "gold": t["answer"], "correct": judge(t["answer"], out),
+                    "gold": t["answer"], "correct": judge_fn(t["answer"], out),
                 })
             (run_dir / f"trajectories_r{r}.json").write_text(
                 json.dumps(trajectories, ensure_ascii=False, indent=2),

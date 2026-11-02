@@ -122,6 +122,22 @@ Smoke run 实测（deepseek-chat，3 轮 × 4 训练题，45 次 API 调用）�
 判分说明：`judge()` 做大小写折叠 + 去除全部空白后的包含匹配
 （模型习惯输出 "5000 元"，标准答案为 "5000元"，空白差异不算错误）。
 
+## OfficeQA 接入（论文主基准，Phase 1 已就绪）
+
+`benchmarks/officeqa/` 已具备完整接入能力（数据 gated，待申请）：
+
+- `prepare.py`：CSV → SkillOps 基准目录。按社区惯例分割 train 50 / val 24 /
+  test 172（难度分层、seed 确定）；val = 门控/监控集，test = 锁定 holdout；
+  `--download` 按 `source_files` 只下载引用到的解析 txt（无需拉全部 460MB）
+- `vendor/reward.py`：Databricks 官方判分器原样收录（Apache 2.0，见 NOTICE.md），
+  五档容差；`<FINAL_ANSWER>` 标签提取、货币格式归一、列表答案均与官方一致
+- 语料检索模式：`benchmark.json` 声明 `corpus_dir` 后，Agent 自动切换到
+  「oracle 文档分块 → bigram 检索 top chunks + 技能注入」模式，
+  `LLMEvolver` 无需改动（轨迹→技能修订与域无关）
+
+数据获批后：`python benchmarks/officeqa/prepare.py --csv officeqa_full.csv --download`
+（网络受限时 `HF_ENDPOINT=https://hf-mirror.com`）。
+
 ## 设计文档
 
 完整项目提案（定位、架构、API、里程碑、技术报告大纲）见同工作区的
